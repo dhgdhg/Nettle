@@ -5,48 +5,110 @@ import time
 from datetime import datetime
 from multiprocessing import Process
 
-email = 'zyh'
-new_mails_dir = os.environ['HOME'] + '/Maildir/.inbox/new'
+# Zhang San: zhangsan@xx.com, zs@xx.com
 
+NAME = 'Zhang San'.lower().split(' ')
+SHORT_NAME = ''.join([i[0] for i in NAME])
+NAME = ''.join(NAME)
+INTERVAL = 30 * 60# seconds
 
-def check():
+NEW_MAILS_DIR = os.path.join(os.environ['HOME'] , 'Maildir/.inbox/new')
+
+def check_in(line):
+    return NAME in line or SHORT_NAME in line
+
+def get_tty_list():
     who_result = os.popen('who|grep $USER').read().split('\n')
-    tty_list = ['/dev/' + i[i.index('pts/'):].split()[0] for i in who_result if i]
+    return ['/dev/' + i[i.index('pts/'):].split()[0] for i in who_result if i]
+
+def get_number(content):
+    i, l = 0, len(content)
+
+    while i < l:
+        line = content[i]
+        i += 1
+
+        if not line:
+            continue
+
+        while line[-1] == ',':
+            line += content[i]
+            i += 1
+
+        if 'Subject: ' == line[:9]:
+            break
+        elif 'To: ' == line[:4] and check_in(line):
+            return 1, 0
+        elif 'Cc: '== line[:4]:
+            if check_in(line):
+                return 0, 1
+            break
+    return 0, 0
+
+def set_number(last_modify, unread_mail):
+    for file_name in os.listdir(NEW_MAILS_DIR):
+        mail_path = os.path.join(NEW_MAILS_DIR, file_name)
+        if os.path.getmtime(mail_path) < last_modify - INTERVAL:
+            continue
+        with open(mail_path, 'r') as f:
+            content = f.read().split('\n')
+            to, cc = get_number(content)
+            if to == 1:
+                unread_mail['to'].add(mail_path)
+            elif cc == 1:
+                unread_mail['cc'].add(mail_path)
+
+def send_message(tty_list, message):
+    for i in tty_list:
+        os.system('echo "{}" > {}'.format(message, i))
+
+def remove_readed(unread_mail):
+    unread_mail['to'] = set(filter(os.path.exists, unread_mail['to']))
+    unread_mail['cc'] = set(filter(os.path.exists, unread_mail['cc']))
+
+def check(unread_mail, last_modify):
+    remove_readed(unread_mail)
+    tty_list = get_tty_list()
     if not tty_list:
         return
-    cc_number = 0
-    to_number = 0
-    for file_name in os.listdir(new_mails_dir):
-        mail_path = os.path.join(new_mails_dir, file_name)
-        with open(mail_path, 'r') as f:
-            content = f.read()
-            if '\nTo: ' in content:
-                to_index = content.index('\nTo: ') + 5
-                if email in content[to_index:][:content[to_index :].index('\n')]:
-                    to_number += 1
-            if '\nCc: ' in content:
-                cc_index = content.index('\nCc: ') + 5
-                if email in content[cc_index:][:content[cc_index :].index('\n')]:
-                    cc_number += 1
-    if not (cc_number | to_number):
-        return
-    message = 'Email Notify: To={}; Cc={};'.format(to_number, cc_number)
-    for i in tty_list:
-        os.system('echo "\n{}" > {}'.format(message, i))
+
+    if last_modify < os.path.getmtime(NEW_MAILS_DIR):
+        set_number(last_modify, unread_mail)
+
+    to_number, cc_number = len(unread_mail['to']), len(unread_mail['cc'])
+    if not (unread_mail['cc'] | unread_mail['to']):
+        return False
+
+    message = '\a\nEmail Notify: To={}; Cc={};'.format(to_number, cc_number)
+    send_message(tty_list, message)
+    return True
 
 def main():
-    if not email:
-        print 'Set email first.'
+    if not NAME:
+        print 'Set NAME first.'
         return
+
     current = datetime.now()
+    unread_mail = {'cc':set(), 'to':set()}
+    last_modify = 0
+
+    if not check(unread_mail, last_modify):
+        message = '\nNo new email.'
+        tty_file = os.system('echo "\n{}" > `tty`'.format(message))
+        send_message([tty_file], message)
+
     while True:
-        if 8 < current.hour < 21:
-            check()
-            # per 30 min check
-            time.sleep(30*60)
+        if 7 < current.hour < 19:
+            time.sleep(INTERVAL)
+            check(unread_mail, last_modify)
+            last_modify = time.time()
         else:
             time.sleep(60*60)
 
 if __name__ == '__main__':
+    pids = os.popen('pgrep nettle -u $USER').read()
+    pids = [i for i in  pids.split('\n') if i][:-1]
+    for i in sorted(pids):
+        os.system('kill {}'.format(i))
     Process(target=main).start()
     os.system("kill -KILL {}".format(os.getpid(), os.getpid()))
