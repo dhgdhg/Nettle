@@ -93,9 +93,7 @@ def main():
     last_modify = 0
 
     if not check(unread_mail, last_modify):
-        message = '\nNo new email.'
-        tty_file = os.system('echo "\n{}" > `tty`'.format(message))
-        send_message([tty_file], message)
+        print '\nNo new email.'
 
     while True:
         if 7 < current.hour < 19:
